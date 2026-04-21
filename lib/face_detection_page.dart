@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:typed_data';
-import 'dart:ui' as ui;
+// import 'dart:ui' as ui; // dart:ui tidak lagi diperlukan untuk takePicture
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
+// import 'package:flutter/rendering.dart'; // Rendering tidak lagi diperlukan
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'api_service.dart';
@@ -16,7 +16,8 @@ class FaceDetectionPage extends StatefulWidget {
 }
 
 class _FaceDetectionPageState extends State<FaceDetectionPage> {
-  final GlobalKey _globalKey = GlobalKey();
+  // GlobalKey masih dipertahankan agar kode tidak rusak, walau tidak dipakai untuk capture
+  final GlobalKey _globalKey = GlobalKey(); 
   CameraController? _controller;
   final FaceDetector _faceDetector = FaceDetector(
     options: FaceDetectorOptions(
@@ -116,7 +117,7 @@ class _FaceDetectionPageState extends State<FaceDetectionPage> {
   }
 
   Future<void> _triggerCaptureEffect() async {
-    if (!mounted) return;
+    if (!mounted || _controller == null || !_controller!.value.isInitialized) return;
     
     setState(() {
       _isCapturingEffect = true;
@@ -125,13 +126,15 @@ class _FaceDetectionPageState extends State<FaceDetectionPage> {
     });
     
     try {
-      RenderRepaintBoundary boundary = _globalKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
-      // Menggunakan pixelRatio: 1.0 agar file menjadi jauh lebih kecil
-      ui.Image image = await boundary.toImage(pixelRatio: 1.0);
-      ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-      Uint8List pngBytes = byteData!.buffer.asUint8List();
+      // Perubahan Utama: Menggunakan takePicture() untuk gambar bersih
+      // takePicture otomatis mengambil gambar mentah dari sensor, tanpa overlay Flutter.
+      final XFile capturedImage = await _controller!.takePicture();
+      final Uint8List imageBytes = await capturedImage.readAsBytes();
 
-      bool success = await _apiService.uploadFaceImage(pngBytes);
+      // Gambar ini sudah bersih (tanpa kotak hijau & banner) dan ukuran filenya 
+      // harusnya sudah disesuaikan oleh takePicture() agar tidak terlalu besar (tergantung ResolutionPreset).
+
+      bool success = await _apiService.uploadFaceImage(imageBytes);
       
       if (mounted) {
         setState(() {
@@ -143,6 +146,14 @@ class _FaceDetectionPageState extends State<FaceDetectionPage> {
       }
     } catch (e) {
       debugPrint("Capture Error: $e");
+      if (mounted) {
+        setState(() {
+          _uploadStatus = "CAPTURE GAGAL!";
+        });
+        Future.delayed(const Duration(seconds: 2), () {
+          if (mounted) setState(() => _uploadStatus = "");
+        });
+      }
     }
 
     setState(() => _isUploading = false);
@@ -168,7 +179,7 @@ class _FaceDetectionPageState extends State<FaceDetectionPage> {
     }
     
     return Scaffold(
-      body: RepaintBoundary(
+      body: RepaintBoundary( // Masih dipertahankan agar struktur tidak berubah, walau tidak dipakai capture
         key: _globalKey,
         child: Stack(
           children: [
