@@ -199,6 +199,17 @@ class FaceDetectionPageState extends State<FaceDetectionPage> {
         child: Stack(
           children: [
             Positioned.fill(child: CameraPreview(_controller!)),
+            // --- TAMBAHKAN INI ---
+            Positioned(
+              top: 40,   // Jarak dari atas (sesuaikan dengan status bar)
+              left: 20,  // Jarak dari kiri
+              child: Image.asset(
+                'assets/starkapp.png',
+                width: 150,  // Sesuaikan ukuran lebar logo
+                height: 150, // Sesuaikan ukuran tinggi logo
+              ),
+            ),
+            // ---------------------
             if (_cameraSize != null)
               Positioned.fill(
                 child: CustomPaint(painter: FacePainter(_detectedFace, _cameraSize!)),
