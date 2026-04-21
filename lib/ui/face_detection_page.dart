@@ -1,23 +1,21 @@
 import 'dart:async';
-import 'dart:typed_data';
-// import 'dart:ui' as ui; // dart:ui tidak lagi diperlukan untuk takePicture
+import 'dart:math';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-// import 'package:flutter/rendering.dart'; // Rendering tidak lagi diperlukan
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
-import 'api_service.dart';
+import 'package:image/image.dart' as img; // Library untuk manipulasi gambar yang handal
+import '../data/api_service.dart';
 
 class FaceDetectionPage extends StatefulWidget {
   const FaceDetectionPage({super.key});
 
   @override
-  _FaceDetectionPageState createState() => _FaceDetectionPageState();
+  FaceDetectionPageState createState() => FaceDetectionPageState();
 }
 
-class _FaceDetectionPageState extends State<FaceDetectionPage> {
-  // GlobalKey masih dipertahankan agar kode tidak rusak, walau tidak dipakai untuk capture
-  final GlobalKey _globalKey = GlobalKey(); 
+class FaceDetectionPageState extends State<FaceDetectionPage> {
+  final GlobalKey _globalKey = GlobalKey();
   CameraController? _controller;
   final FaceDetector _faceDetector = FaceDetector(
     options: FaceDetectorOptions(
@@ -25,7 +23,7 @@ class _FaceDetectionPageState extends State<FaceDetectionPage> {
       enableTracking: false,
     ),
   );
-  
+
   final ApiService _apiService = ApiService();
   bool _isProcessing = false;
   bool _isCapturingEffect = false;
@@ -48,20 +46,20 @@ class _FaceDetectionPageState extends State<FaceDetectionPage> {
     if (cameras.isEmpty) return;
 
     _controller = CameraController(
-      cameras[1], 
-      ResolutionPreset.low, 
+      cameras[1],
+      ResolutionPreset.medium, // Ditingkatkan ke medium agar detail wajah terbaca
       enableAudio: false,
       imageFormatGroup: ImageFormatGroup.nv21,
     );
-    
+
     await _controller!.initialize();
     if (!mounted) return;
-    
+
     _cameraSize = Size(
-      _controller!.value.previewSize!.height, 
-      _controller!.value.previewSize!.width
+      _controller!.value.previewSize!.height,
+      _controller!.value.previewSize!.width,
     );
-    
+
     _controller!.startImageStream((image) {
       if (!_isProcessing && !_isUploading) _processCamera(image);
     });
@@ -89,18 +87,18 @@ class _FaceDetectionPageState extends State<FaceDetectionPage> {
       );
 
       final faces = await _faceDetector.processImage(inputImage);
-      
+
       if (mounted) {
         setState(() {
           if (faces.isNotEmpty) {
             _detectedFace = faces.first;
             _lastDetectedTime = DateTime.now();
-            
+
             _captureTimer ??= Timer(const Duration(seconds: 1), () {
               _triggerCaptureEffect();
             });
           } else {
-            if (_lastDetectedTime != null && 
+            if (_lastDetectedTime != null &&
                 DateTime.now().difference(_lastDetectedTime!).inMilliseconds > 150) {
               _detectedFace = null;
               _captureTimer?.cancel();
@@ -117,43 +115,60 @@ class _FaceDetectionPageState extends State<FaceDetectionPage> {
   }
 
   Future<void> _triggerCaptureEffect() async {
-    if (!mounted || _controller == null || !_controller!.value.isInitialized) return;
-    
+    if (!mounted || _controller == null || !_controller!.value.isInitialized || _detectedFace == null) return;
+
     setState(() {
       _isCapturingEffect = true;
       _isUploading = true;
       _uploadStatus = "MENCOCOKKAN WAJAH...";
     });
-    
+
     try {
-      // Perubahan Utama: Menggunakan takePicture() untuk gambar bersih
-      // takePicture otomatis mengambil gambar mentah dari sensor, tanpa overlay Flutter.
-      final XFile capturedImage = await _controller!.takePicture();
-      final Uint8List imageBytes = await capturedImage.readAsBytes();
+      final XFile capturedFile = await _controller!.takePicture();
+      final Uint8List bytes = await capturedFile.readAsBytes();
 
-      // Gambar ini sudah bersih (tanpa kotak hijau & banner) dan ukuran filenya 
-      // harusnya sudah disesuaikan oleh takePicture() agar tidak terlalu besar (tergantung ResolutionPreset).
+      // Decode menggunakan library image
+      final img.Image? fullImage = img.decodeImage(bytes);
+      if (fullImage == null) throw Exception("Gagal decode gambar");
 
-      bool success = await _apiService.uploadFaceImage(imageBytes);
-      
+      // Menghitung koordinat berdasarkan rasio resolusi asli
+      final faceRect = _detectedFace!.boundingBox;
+      final double scaleX = fullImage.width / _cameraSize!.width;
+      final double scaleY = fullImage.height / _cameraSize!.height;
+
+      // Logika cropping dengan padding
+      int x = (faceRect.left * scaleX).toInt();
+      int y = (faceRect.top * scaleY).toInt();
+      int w = (faceRect.width * scaleX).toInt();
+      int h = (faceRect.height * scaleY).toInt();
+
+      int padX = (w * 0.3).toInt();
+      int padY = (h * 0.3).toInt();
+
+      x = max(0, x - padX);
+      y = max(0, y - padY);
+      w = min(fullImage.width - x, w + (padX * 2));
+      h = min(fullImage.height - y, h + (padY * 2));
+
+      // Eksekusi Crop
+      final img.Image cropped = img.copyCrop(fullImage, x: x, y: y, width: w, height: h);
+
+      // Encode ke JPEG berkualitas tinggi
+      final Uint8List croppedBytes = Uint8List.fromList(img.encodeJpg(cropped, quality: 90));
+
+      bool success = await _apiService.uploadFaceImage(croppedBytes);
+
       if (mounted) {
         setState(() {
-          _uploadStatus = success ? "UPLOAD BERHASIL!" : "UPLOAD GAGAL!";
+          _uploadStatus = success ? "SERVER TERIMA, MACHINE LEARNING.." : "SERVER GAGAL MENERIMA MUKA!";
         });
         Future.delayed(const Duration(seconds: 2), () {
           if (mounted) setState(() => _uploadStatus = "");
         });
       }
     } catch (e) {
-      debugPrint("Capture Error: $e");
-      if (mounted) {
-        setState(() {
-          _uploadStatus = "CAPTURE GAGAL!";
-        });
-        Future.delayed(const Duration(seconds: 2), () {
-          if (mounted) setState(() => _uploadStatus = "");
-        });
-      }
+      debugPrint("Capture/Crop Error: $e");
+      if (mounted) setState(() => _uploadStatus = "CAPTURE GAGAL!");
     }
 
     setState(() => _isUploading = false);
@@ -177,36 +192,28 @@ class _FaceDetectionPageState extends State<FaceDetectionPage> {
     if (_controller == null || !_controller!.value.isInitialized) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    
+
     return Scaffold(
-      body: RepaintBoundary( // Masih dipertahankan agar struktur tidak berubah, walau tidak dipakai capture
+      body: RepaintBoundary(
         key: _globalKey,
         child: Stack(
           children: [
             Positioned.fill(child: CameraPreview(_controller!)),
-            
             if (_cameraSize != null)
               Positioned.fill(
-                child: CustomPaint(
-                  painter: FacePainter(_detectedFace, _cameraSize!),
-                ),
+                child: CustomPaint(painter: FacePainter(_detectedFace, _cameraSize!)),
               ),
-
-            if (_isCapturingEffect)
-              Container(color: Colors.white.withOpacity(0.8)),
-
+            if (_isCapturingEffect) Container(color: Colors.white.withValues(alpha: 0.8)),
             Align(
               alignment: Alignment.bottomCenter,
               child: Container(
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(vertical: 20),
-                color: _uploadStatus.isNotEmpty 
-                    ? (_uploadStatus == "UPLOAD BERHASIL!" ? Colors.green.withOpacity(0.8) : Colors.red.withOpacity(0.8))
-                    : (_detectedFace != null ? Colors.blue.withOpacity(0.7) : Colors.black.withOpacity(0.5)),
+                color: _uploadStatus.isNotEmpty
+                    ? (_uploadStatus == "UPLOAD BERHASIL!" ? Colors.green.withValues(alpha: 0.8) : Colors.red.withValues(alpha: 0.8))
+                    : (_detectedFace != null ? Colors.blue.withValues(alpha: 0.7) : Colors.black.withValues(alpha: 0.5)),
                 child: Text(
-                  _uploadStatus.isNotEmpty 
-                      ? _uploadStatus 
-                      : (_detectedFace != null ? "WAJAH TERDETEKSI" : "MENCARI WAJAH..."),
+                  _uploadStatus.isNotEmpty ? _uploadStatus : (_detectedFace != null ? "WAJAH TERDETEKSI" : "MENCARI WAJAH..."),
                   textAlign: TextAlign.center,
                   style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
                 ),
@@ -227,22 +234,14 @@ class FacePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     if (face == null) return;
-    
     final double scaleX = size.width / cameraSize.width;
     final double scaleY = size.height / cameraSize.height;
-
-    final paint = Paint()
-      ..color = Colors.greenAccent
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 5.0;
-    
+    final paint = Paint()..color = Colors.greenAccent..style = PaintingStyle.stroke..strokeWidth = 5.0;
     final rect = face!.boundingBox;
-
     final double left = (cameraSize.width - rect.right) * scaleX;
     final double right = (cameraSize.width - rect.left) * scaleX;
     final double top = rect.top * scaleY;
     final double bottom = rect.bottom * scaleY;
-
     canvas.drawRect(Rect.fromLTRB(left, top, right, bottom), paint);
   }
 

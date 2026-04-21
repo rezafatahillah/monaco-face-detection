@@ -38,6 +38,10 @@ dependencies:
   wakelock_plus: ^1.2.0
   cupertino_icons: ^1.0.8
   google_mlkit_face_mesh_detection: ^0.4.2
+  vector_math: ^2.1.4
+  image: ^4.2.0
+  flutter_secure_storage: ^8.1.0
+  flutter_dotenv: ^6.0.1
 
 dev_dependencies:
   flutter_test:
@@ -60,6 +64,9 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    - .env
 
   # To add assets to your application, add an assets section, like this:
   # assets:
